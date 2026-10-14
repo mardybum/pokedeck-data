@@ -41,9 +41,18 @@ jobs:
           key: catalog-${{ hashFiles('code/Packages/PokeDeckKit/Package.resolved') }}-${{ github.run_id }}
           restore-keys: catalog-${{ hashFiles('code/Packages/PokeDeckKit/Package.resolved') }}-
 
+      - name: Zuletzt veröffentlichten Katalog holen (Vergleich + Rückfall bei Quellen-Aussetzern)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/previous"
+          if gh release download catalog --repo "$GITHUB_REPOSITORY" --pattern catalog.sqlite.lzfse --dir "$RUNNER_TEMP/previous"; then
+            echo "PREVIOUS_CATALOG=$RUNNER_TEMP/previous/catalog.sqlite.lzfse" >> "$GITHUB_ENV"
+          fi
+
       - name: Katalog bauen (TCGdex + Limitless, mit Prüfungen)
         working-directory: code
-        run: Scripts/build-catalog.sh
+        run: Scripts/build-catalog.sh ${PREVIOUS_CATALOG:+--previous "$PREVIOUS_CATALOG"}
 
       - name: Update packen
         working-directory: code/Packages/PokeDeckKit
