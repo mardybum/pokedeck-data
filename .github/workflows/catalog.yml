@@ -1,0 +1,66 @@
+# Baut jede Nacht die Kartendaten für PokéDeck und veröffentlicht sie als Release „catalog“.
+# Der App-Code liegt in einem privaten Repo; er wird nur gelesen (Deploy-Key, Secret CODE_DEPLOY_KEY).
+name: Kartendaten
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # täglich 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: catalog
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: App-Code holen (privat, nur lesend)
+        uses: actions/checkout@v4
+        with:
+          repository: mardybum/pokedeck
+          ssh-key: ${{ secrets.CODE_DEPLOY_KEY }}
+          path: code
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Cache (Build + höfliche API-Antworten)
+        uses: actions/cache@v4
+        with:
+          path: |
+            code/Packages/PokeDeckKit/.build
+            code/.build-cache
+          key: catalog-${{ hashFiles('code/Packages/PokeDeckKit/Package.resolved') }}-${{ github.run_id }}
+          restore-keys: catalog-${{ hashFiles('code/Packages/PokeDeckKit/Package.resolved') }}-
+
+      - name: Katalog bauen (TCGdex + Limitless, mit Prüfungen)
+        working-directory: code
+        run: Scripts/build-catalog.sh
+
+      - name: Update packen
+        working-directory: code/Packages/PokeDeckKit
+        run: |
+          .build/release/CatalogBuilder package \
+            --catalog ../../App/Resources/catalog.sqlite \
+            --resources ../../App/Resources \
+            --out "$RUNNER_TEMP/update"
+
+      - name: Veröffentlichen (Daten zuerst, Manifest zuletzt)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/update"
+          gh release view catalog --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create catalog --repo "$GITHUB_REPOSITORY" --title "Kartendaten" --notes "Wird jede Nacht erneuert."
+          gh release upload catalog --repo "$GITHUB_REPOSITORY" --clobber $(ls | grep -v '^manifest.json$')
+          gh release upload catalog --repo "$GITHUB_REPOSITORY" --clobber manifest.json
+          gh release edit catalog --repo "$GITHUB_REPOSITORY" \
+            --notes "Stand $(jq -r .builtAt manifest.json) · $(jq -r .printCount manifest.json) Drucke · automatisch gebaut"
